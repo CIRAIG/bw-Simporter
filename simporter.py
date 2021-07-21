@@ -188,18 +188,20 @@ class Simporter:
                                     continue
 
                                 if (reference_product == 'Diesel, burned in diesel-electric generating set' or
+                                        reference_product == 'Sulfidic tailing, off-site' or
                                         'recycling of' in name):
                                     self.only_in_simapro.append(
                                         {'name': self.sp.data[i]['exchanges'][j]['name'], 'origin': self.sp.data[i]['name'],
                                          'amount': self.sp.data[i]['exchanges'][j]['amount']})
                                     continue
 
-                                if (name in ['market for', 'market group for'] or 'to generic market for' in name):
+                                if (name in ['market for', 'market group for', 'treatment of'] or
+                                        re.findall(r'.*? to generic market for$',name)):
                                     name = name + ' ' + reference_product
                                     try:
-                                        ecoinvent_code = [i for i in Database(self.ecoinvent_name).search(
+                                        ecoinvent_code = [act for act in Database(self.ecoinvent_name).search(
                                                               reference_product, filter={'location': location}) if
-                                                          str(i).split("'")[1].split("' ")[0].lower() == name.lower()][0].get('code')
+                                                          str(act).split("'")[1].split("' ")[0].lower() == name.lower()][0].get('code')
                                         self.sp.data[i]['exchanges'][j]['output'] = (self.ecoinvent_name, self.sp.data[i]['code'])
                                         self.sp.data[i]['exchanges'][j]['input'] = (self.ecoinvent_name, ecoinvent_code)
                                         continue
@@ -215,9 +217,9 @@ class Simporter:
                                 if 'treatment of,' in name:
                                     name = name.split(',')[0] + ' ' + reference_product + ',' + name.split(',')[1]
                                     try:
-                                        ecoinvent_code = [i for i in Database(self.ecoinvent_name).search(
+                                        ecoinvent_code = [act for act in Database(self.ecoinvent_name).search(
                                                               reference_product, filter={'location': location}) if
-                                                          str(i).split("'")[1].split("' ")[0].lower() == name.lower()][0].get('code')
+                                                          str(act).split("'")[1].split("' ")[0].lower() == name.lower()][0].get('code')
                                         self.sp.data[i]['exchanges'][j]['output'] = (self.ecoinvent_name, self.sp.data[i]['code'])
                                         self.sp.data[i]['exchanges'][j]['input'] = (self.ecoinvent_name, ecoinvent_code)
                                         continue
@@ -233,9 +235,9 @@ class Simporter:
                                 if ('diesel' == name and 'ransport' in reference_product):
                                     name = reference_product + ', ' + name
                                     try:
-                                        ecoinvent_code = [i for i in Database(self.ecoinvent_name).search(
+                                        ecoinvent_code = [act for act in Database(self.ecoinvent_name).search(
                                                               reference_product, filter={'location': location}) if
-                                                          str(i).split("'")[1].split("' ")[0].lower() == name.lower()][0].get('code')
+                                                          str(act).split("'")[1].split("' ")[0].lower() == name.lower()][0].get('code')
                                         self.sp.data[i]['exchanges'][j]['output'] = (self.ecoinvent_name, self.sp.data[i]['code'])
                                         self.sp.data[i]['exchanges'][j]['input'] = (self.ecoinvent_name, ecoinvent_code)
                                         continue
@@ -249,9 +251,9 @@ class Simporter:
                                         continue
 
                                 if name == 'construction':
-                                    ecoinvent_code = [i for i in Database(self.ecoinvent_name).search(
+                                    ecoinvent_code = [act for act in Database(self.ecoinvent_name).search(
                                                           reference_product, filter={'location': location}) if
-                                                      name in i.get('name')][0].get('code')
+                                                      name in act.get('name')][0].get('code')
                                     self.sp.data[i]['exchanges'][j]['output'] = (self.ecoinvent_name, self.sp.data[i]['code'])
                                     self.sp.data[i]['exchanges'][j]['input'] = (self.ecoinvent_name, ecoinvent_code)
                                     continue
@@ -259,9 +261,9 @@ class Simporter:
                                 if name == 'quarry operation':
                                     name = reference_product + ' ' + name
                                     try:
-                                        ecoinvent_code = [i for i in Database(self.ecoinvent_name).search(
+                                        ecoinvent_code = [act for act in Database(self.ecoinvent_name).search(
                                                               reference_product, filter={'location': location}) if
-                                                          str(i).split("'")[1].split("' ")[0].lower() == name.lower()][0].get('code')
+                                                          str(act).split("'")[1].split("' ")[0].lower() == name.lower()][0].get('code')
                                         self.sp.data[i]['exchanges'][j]['output'] = (self.ecoinvent_name, self.sp.data[i]['code'])
                                         self.sp.data[i]['exchanges'][j]['input'] = (self.ecoinvent_name, ecoinvent_code)
                                         continue
@@ -296,9 +298,9 @@ class Simporter:
 
                                 elif 'production' not in name:
                                     try:
-                                        ecoinvent_code = [i for i in Database(self.ecoinvent_name).search(
+                                        ecoinvent_code = [act for act in Database(self.ecoinvent_name).search(
                                                               reference_product,filter={'location': location}) if
-                                                          str(i).split("'")[1].split("' ")[0].lower() == name.lower()][0].get('code')
+                                                          str(act).split("'")[1].split("' ")[0].lower() == name.lower()][0].get('code')
                                         self.sp.data[i]['exchanges'][j]['output'] = (self.ecoinvent_name, self.sp.data[i]['code'])
                                         self.sp.data[i]['exchanges'][j]['input'] = (self.ecoinvent_name, ecoinvent_code)
                                         continue
@@ -312,20 +314,30 @@ class Simporter:
                                         continue
 
                                 elif 'production' == name:
-                                    try:
-                                        ecoinvent_code = [i for i in Database(self.ecoinvent_name).search(
-                                                              reference_product, filter={'location': location})
-                                                          if ''.join(i.get('name').split('production')).lower().replace(
-                                                ' ', '') == reference_product.lower().replace(' ', '')][0].get('code')
-                                        self.sp.data[i]['exchanges'][j]['output'] = (self.ecoinvent_name, self.sp.data[i]['code'])
-                                        self.sp.data[i]['exchanges'][j]['input'] = (self.ecoinvent_name, ecoinvent_code)
-                                        continue
-                                    except IndexError:
+                                    if len(reference_product.split('production')) == 1:
+                                        try:
+                                            ecoinvent_code = [act for act in Database(self.ecoinvent_name).search(
+                                                                  reference_product, filter={'location': location})
+                                                              if ''.join(act.get('name').split('production')).lower().replace(
+                                                    ' ', '') == reference_product.lower().replace(' ', '')][0].get('code')
+                                            self.sp.data[i]['exchanges'][j]['output'] = (self.ecoinvent_name, self.sp.data[i]['code'])
+                                            self.sp.data[i]['exchanges'][j]['input'] = (self.ecoinvent_name, ecoinvent_code)
+                                            continue
+                                        except IndexError:
+                                            ecoinvent_code = [act for act in Database(self.ecoinvent_name) if (
+                                                        reference_product.lower().replace(' ', '') == ''.join(
+                                                    act.get('name').split('production')).lower().replace(' ', '')
+                                                        and name.lower() in act.get('name').lower()
+                                                        and act.get('location') == location)][0].get('code')
+                                            self.sp.data[i]['exchanges'][j]['output'] = (self.ecoinvent_name, self.sp.data[i]['code'])
+                                            self.sp.data[i]['exchanges'][j]['input'] = (self.ecoinvent_name, ecoinvent_code)
+                                            continue
+                                    elif len(reference_product.split('production')) > 1:
                                         ecoinvent_code = [act for act in Database(self.ecoinvent_name) if (
-                                                    reference_product.lower().replace(' ', '') == ''.join(
-                                                act.get('name').split('production')).lower().replace(' ', '')
-                                                    and name.lower() in act.get('name').lower()
-                                                    and act.get('location') == location)][0].get('code')
+                                                    act.as_dict()['reference product'].lower() == reference_product.lower() and
+                                                    act.get('location') == location and
+                                                    ''.join(act.get('name').split('production')).lower().replace(' ','') ==
+                                                    ''.join(reference_product.split('production')).lower().replace(' ', ''))][0].get('code')
                                         self.sp.data[i]['exchanges'][j]['output'] = (self.ecoinvent_name, self.sp.data[i]['code'])
                                         self.sp.data[i]['exchanges'][j]['input'] = (self.ecoinvent_name, ecoinvent_code)
                                         continue
@@ -333,9 +345,9 @@ class Simporter:
                                 elif re.findall(r'^[p][r][o][d][u][c][t][i][o][n]', name) and name != 'production':
                                     name = reference_product + ' ' + name
                                     try:
-                                        ecoinvent_code = [i for i in Database(self.ecoinvent_name).search(
+                                        ecoinvent_code = [act for act in Database(self.ecoinvent_name).search(
                                                               reference_product, filter={'location': location}) if
-                                                          str(i).split("'")[1].split("' ")[0].lower() == name.lower()][0].get('code')
+                                                          str(act).split("'")[1].split("' ")[0].lower() == name.lower()][0].get('code')
                                         self.sp.data[i]['exchanges'][j]['output'] = (self.ecoinvent_name, self.sp.data[i]['code'])
                                         self.sp.data[i]['exchanges'][j]['input'] = (self.ecoinvent_name, ecoinvent_code)
                                         continue
@@ -350,9 +362,9 @@ class Simporter:
 
                                 elif 'production' in name:
                                     try:
-                                        ecoinvent_code = [i for i in Database(self.ecoinvent_name).search(
+                                        ecoinvent_code = [act for act in Database(self.ecoinvent_name).search(
                                                               reference_product, filter={'location': location}) if
-                                                          str(i).split("'")[1].split("' ")[0].lower() == name.lower()][0].get('code')
+                                                          str(act).split("'")[1].split("' ")[0].lower() == name.lower()][0].get('code')
                                         self.sp.data[i]['exchanges'][j]['output'] = (self.ecoinvent_name, self.sp.data[i]['code'])
                                         self.sp.data[i]['exchanges'][j]['input'] = (self.ecoinvent_name, ecoinvent_code)
                                         continue
