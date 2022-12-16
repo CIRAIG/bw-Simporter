@@ -8,6 +8,7 @@ author: maxime.agez@polymtl.ca
 from brightway2 import *
 import re
 import pkg_resources
+import logging
 
 
 class Simporter:
@@ -40,7 +41,7 @@ class Simporter:
             - importing_parameters()
     """
     def __init__(self, bw_project_name, ecoinvent_db_name_in_bw, biosphere_db_name_in_bw,
-                 sp_csv_file, db_name, delimiter=';'):
+                 sp_csv_file, db_name, ecoinvent_version_used, delimiter=';'):
         """
         params:
         ------
@@ -56,16 +57,28 @@ class Simporter:
                 delimiter: [string] the delimiter which was used in the simapro csv file
         """
 
-        print("Importing files...")
+        # set up logging tool
+        logger = logging.getLogger('bw-simporter')
+        logger.setLevel(logging.INFO)
+        logger.handlers = []
+        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        ch = logging.StreamHandler()
+        ch.setLevel(logging.DEBUG)
+        ch.setFormatter(formatter)
+        logger.addHandler(ch)
+        logger.propagate = False
+
+        logger.info("Importing files...")
 
         self.project_name = bw_project_name
         self.ecoinvent_name = ecoinvent_db_name_in_bw
         self.biosphere_name = biosphere_db_name_in_bw
         self.csv_file = sp_csv_file
         self.db_name = db_name
+        self.ei_version = ecoinvent_version_used
         self.delimiter = delimiter
 
-        file = open(pkg_resources.resource_filename(__name__, '/Data/obsolete_processes.json'), 'r')
+        file = open(pkg_resources.resource_filename(__name__, '/Data/ei'+str(self.ei_version)+'/obsolete_processes.json'), 'r')
         self.obsolete = eval(file.read())
 
         file = open(pkg_resources.resource_filename(__name__, 'Data/simapro-biosphere_modified_max.json'), 'r')
@@ -81,28 +94,34 @@ class Simporter:
         self.only_in_simapro = []
         self.created_biosphere_flows = []
 
-        print("Cleaning the csv file...")
+        logger.info("Cleaning the csv file...")
         self.cleaning_the_csv_file()
 
-        print("Importing data in brightway2...")
+        logger.info("Importing data in brightway2. This may take a while...")
         self.importing_data_to_brightway2()
 
-        print("Connecting to ecoinvent...")
+        logger.info("Applying brightway strategies...")
+        self.applying_bw2_strategies()
+
+        logger.info("Applying basic brightway2 matching with ecoinvent and biosphere...")
+        self.basic_matching_to_ecoinvent_and_biosphere()
+
+        logger.info("Refining the matching with ecoinvent...")
         self.matching_to_ecoinvent()
 
-        print("Connecting to biosphere...")
+        logger.info("Refining the matching with biosphere...")
         self.matching_to_biosphere()
 
-        print("Removing unlinked exchanges...")
+        logger.info("Removing unlinked exchanges...")
         self.removing_unlinked_exchanges()
 
-        print("Writing the database...")
+        logger.info("Writing the database...")
         self.writing_database()
 
-        print("Importing the parameters...")
+        logger.info("Importing the parameters...")
         self.importing_parameters()
 
-        print("The import was a success. If you have processes if self.obsolete_processes, self.system_processes, "
+        logger.info("The import was a success. If you have processes if self.obsolete_processes, self.system_processes, "
               "self.only_in_simapro or self.created_biosphere_flows you have to reconnect them manually inside brightway2")
 
     def cleaning_the_csv_file(self):
@@ -111,26 +130,14 @@ class Simporter:
         for the ecoinvent in brightway2
         :return:
         """
-        csv = open(self.csv_file)
-        txt = csv.read()
+        with open(self.csv_file, 'r', encoding="latin-1") as f:
+            txt = f.read()
         txt_split = txt.split('\n')
 
-        for i, element in enumerate(txt_split):
-            if re.findall(r'^[D][a][t][a][b][a][s][e]', element):
-                if 'Input' in element:
-                    position_database_input_param = i
-                elif 'Calculated' in element:
-                    position_database_calc_param = i
-            if re.findall(r'^[P][r][o][j][e][c][t]', element):
-                if 'Input' in element:
-                    position_project_input_param = i
+        txt_split = dealing_with_reserved_names(txt_split)
 
-        for i in range(position_database_input_param + 1, position_database_calc_param - 2):
-            txt_split[i] = txt_split[i].replace(txt_split[i], '')
-        for i in range(position_database_calc_param + 1, position_project_input_param - 2):
-            txt_split[i] = txt_split[i].replace(txt_split[i], '')
-
-        my_file = open(pkg_resources.resource_filename(__name__, 'Treated_csv_files/'+self.db_name+'.csv'), "w")
+        my_file = open(pkg_resources.resource_filename(__name__, 'Treated_csv_files/'+self.db_name+'.csv'), "w",
+                       encoding="latin-1")
         new_file_contents = "\n".join(txt_split)
         my_file.write(str(new_file_contents))
         my_file.close()
@@ -147,7 +154,12 @@ class Simporter:
         self.sp = SimaProCSVImporter(filepath=pkg_resources.resource_filename(__name__, 'Treated_csv_files/'+self.db_name+'.csv'),
                                 name=self.db_name,
                                 delimiter=self.delimiter)
+
+    def applying_bw2_strategies(self):
+        self.dealing_with_allocation_defined_by_parameters()
         self.sp.apply_strategies()
+
+    def basic_matching_to_ecoinvent_and_biosphere(self):
         self.sp.match_database(self.ecoinvent_name, fields=['name', 'unit', 'reference product', 'location'])
         self.sp.match_database(self.biosphere_name, ignore_categories=True)
 
@@ -470,3 +482,142 @@ class Simporter:
 
         self.sp.database_parameters = param_list
         self.sp.write_database_parameters(activate_parameters=True, delete_existing=True)
+
+    def dealing_with_allocation_defined_by_parameters(self):
+        """Allocations defined with parameters create a problem as a string is entered as a parameter into bw2
+        which only accepts floats. Unfortunately, can't keep the parameter used in the allocation, i.e., can only
+        keep the value. That's because brightway2 does not allow the "allocation" key to be defined with a formula."""
+
+        # identify processes with allocations defined with parameters
+        allocation_with_parameters = []
+        for i, process in enumerate(self.sp.data):
+            for exc in process["exchanges"]:
+                try:
+                    if type(exc["allocation"]) == str:
+                        if i not in allocation_with_parameters:
+                            allocation_with_parameters.append(i)
+                except:
+                    pass
+
+        # for these processes we will replace the string value by the float value of the parameter
+        for problematic_processes in allocation_with_parameters:
+            for exc in self.sp.data[problematic_processes]['exchanges']:
+                # only for flows with allocation (production exchanges)
+                if 'allocation' in exc.keys():
+                    # only if allocation is a string
+                    if type(exc['allocation']) == str:
+                        alloc_name = exc['allocation']
+                        try:
+                            # if it's an activity parameter which is used to define the allocation
+                            if alloc_name.lower() in self.sp.data[problematic_processes]['parameters']:
+                                # replace string by float value
+                                exc['allocation'] = \
+                                self.sp.data[problematic_processes]['parameters'][alloc_name.lower()]['amount']
+                            # if it's a global parameter which is used to define the allocation
+                            elif alloc_name.lower() in self.sp.global_parameters:
+                                # replace string by float value
+                                exc['allocation'] = self.sp.global_parameters[alloc_name.lower()]['amount']
+                        except KeyError:
+                            # if it's a global parameter which is used to define the allocation but no input parameters defined
+                            if alloc_name.lower() in self.sp.global_parameters:
+                                # replace string by float value
+                                exc['allocation'] = self.sp.global_parameters[alloc_name.lower()]['amount']
+                            else:
+                                raise ValueError("Allocation defined on a parameter that does no exist.")
+
+        # check if there are no more issues
+        allocation_with_parameters = []
+        for i, process in enumerate(self.sp.data):
+            for exc in process["exchanges"]:
+                try:
+                    if type(exc["allocation"]) == str:
+                        if i not in allocation_with_parameters:
+                            allocation_with_parameters.append(i)
+                except:
+                    pass
+        assert len(allocation_with_parameters) == 0
+
+
+def dealing_with_reserved_names(txt_split):
+    """
+    If the project has the bad habit to use Python-reserved names for its parameters, we have to rename those to be able
+    to export to brightway2.
+    :return: the csv txt file with modified parameter names
+    """
+
+    for i, element in enumerate(txt_split):
+        if re.findall(r';iff', element):
+            txt_split[i] = txt_split[i].replace(element.split(';')[1], '0')
+        if re.findall(r';Iff', element):
+            txt_split[i] = txt_split[i].replace(element.split(';')[1], '0')
+        if re.findall(r'^Int;', element):
+            element = re.sub(r'^Int;', 'switch_int;', element)
+            txt_split[i] = element
+        if re.findall(r'[*]int;', element):
+            element = re.sub(r'[*]int;', '*switch_int;', element)
+            txt_split[i] = element
+        if re.findall(r'[*]int[/]', element):
+            element = re.sub(r'[*]int[/]', '*switch_int/', element)
+            txt_split[i] = element
+        if re.findall(r'[*]int[*]', element):
+            element = re.sub(r'[*]int[*]', '*switch_int*', element)
+            txt_split[i] = element
+        if re.findall(r'[*]Int', element):
+            element = re.sub(r'[*]Int', '*switch_int', element)
+            txt_split[i] = element
+        if re.findall(r'^as;', element):
+            element = re.sub(r'^as;', 'as_;', element)
+            txt_split[i] = element
+        if re.findall(r'[*]as', element) and not re.findall(r'[*]as_alu', element):
+            element = re.sub(r'[*]as', '*as_', element)
+            txt_split[i] = element
+        if re.findall(r'^AS;', element):
+            element = re.sub(r'^AS;', 'as_;', element)
+            txt_split[i] = element
+        if re.findall(r'[*]AS;', element):
+            element = re.sub(r'[*]AS;', '*as_;', element)
+            txt_split[i] = element
+        if re.findall(r'1[-]as', element) and not re.findall(r'1[-]as_alu', element):
+            element = re.sub(r'1[-]as', '1-as_', element)
+            txt_split[i] = element
+        if re.findall(r'1[-]AS', element) and not re.findall(r'1[-]AS_', element):
+            element = re.sub(r'1[-]AS', '1-as_', element)
+            txt_split[i] = element
+        if re.findall(r'[*]pi;', element):
+            element = re.sub(r'[*]pi;', '*3.14;', element)
+            txt_split[i] = element
+        if re.findall(r'[*]Pi[*]', element):
+            element = re.sub(r'[*]Pi[*]', '*3.14*', element)
+            txt_split[i] = element
+        if re.findall(r'[*]pi[)]', element):
+            element = re.sub(r'[*]pi[)]', '*3.14)', element)
+            txt_split[i] = element
+        if re.findall(r'[*]Pi[)]', element):
+            element = re.sub(r'[*]Pi[)]', '*3.14)', element)
+            txt_split[i] = element
+        if re.findall(r'^add;', element):
+            element = re.sub(r'^add;', 'added;', element)
+            txt_split[i] = element
+        if re.findall(r'add[*]', element):
+            element = re.sub(r'add[*]', 'added*', element)
+            txt_split[i] = element
+        if re.findall(r'^poly;', element):
+            element = re.sub(r'^poly;', 'polyy;', element)
+            txt_split[i] = element
+        if re.findall(r'[+]poly[+]', element):
+            element = re.sub(r'[+]poly[+]', '+polyy+', element)
+            txt_split[i] = element
+        if re.findall(r'^prod;', element):
+            element = re.sub(r'^prod;', 'prodd;', element)
+            txt_split[i] = element
+        if re.findall(r';prod[/]', element):
+            element = re.sub(r';prod[/]', ';prodd/', element)
+            txt_split[i] = element
+        if re.findall(r'empty;', element):
+            element = re.sub(r'empty;', 'empty_factor;', element)
+            txt_split[i] = element
+        if re.findall(r'empty[/]', element):
+            element = re.sub(r'empty[/]', 'empty_factor/', element)
+            txt_split[i] = element
+
+    return txt_split
